@@ -1,0 +1,1 @@
+{"class":"org.apache.spark.ml.feature.VectorAssembler","timestamp":1786993528161,"sparkVersion":"4.0.3","uid":"VectorAssembler_48d6559ac839","paramMap":{"inputCols":["air_temperature","process_temperature","rpm","torque","tool_wear"],"outputCol":"features"},"defaultParamMap":{"handleInvalid":"error","outputCol":"VectorAssembler_48d6559ac839__output"}}

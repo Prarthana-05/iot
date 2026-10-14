@@ -1,0 +1,34 @@
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Node modules & frontend build
+node_modules/
+frontend/node_modules/
+dist/
+build/
+.vite/
+
+# Python caches
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+
+# User excluded folder
+finalyear/
+
+# Docker volumes & local data
+.ivy2/
+influxdb-data/
+*.log
+
+# IDE & OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
