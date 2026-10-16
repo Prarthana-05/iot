@@ -6,7 +6,6 @@ import {
   AlertTriangle,
   CheckCircle,
   Brain,
-  Radio,
   Clock,
   Layers,
   Sliders,
@@ -17,12 +16,15 @@ import {
   ArrowRight,
   Server,
   Zap,
+  ShieldAlert,
+  RotateCcw,
 } from "lucide-react";
 import {
   LineChart,
   Line,
-  AreaChart,
+  ComposedChart,
   Area,
+  ReferenceLine,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -42,16 +44,27 @@ const MACHINE_OPTIONS = [
   { id: "Machine-04", name: "Robotic Drill Rig" },
 ];
 
+const DRIFT_FEATURES = [
+  { key: "process_temperature", label: "Process Temp", unit: "K", mean: 310.0, std: 1.48, lower: 307.04, upper: 312.96 },
+  { key: "torque", label: "Torque", unit: "Nm", mean: 40.0, std: 9.97, lower: 20.06, upper: 59.94 },
+  { key: "air_temperature", label: "Air Temp", unit: "K", mean: 300.0, std: 2.0, lower: 296.0, upper: 304.0 },
+  { key: "rpm", label: "Rotational Speed", unit: "RPM", mean: 1538.8, std: 179.3, lower: 1180.2, upper: 1897.4 },
+  { key: "tool_wear", label: "Tool Wear", unit: "min", mean: 108.0, std: 63.65, lower: 0.0, upper: 235.3 },
+];
+
 function App() {
   const [activePage, setActivePage] = useState("Dashboard");
   const [selectedMachine, setSelectedMachine] = useState("Machine-01");
   const [latest, setLatest] = useState(null);
-  const [fleet, setFleet] = useState({ total: 4, healthy: 2, warning: 1, critical: 1, machines: [] });
+  const [fleet, setFleet] = useState({ total: 4, healthy: 2, warning: 1, critical: 1, drifting: 2, machines: [] });
   const [sensorHistory, setSensorHistory] = useState([]);
 
+  // Module 4 Drift Monitoring States
+  const [driftFeature, setDriftFeature] = useState("process_temperature");
+  const [driftData, setDriftData] = useState(null);
+  const [driftSimLoading, setDriftSimLoading] = useState(false);
+
   // History Tab States
-  const [historyRange, setHistoryRange] = useState("1h");
-  const [historyAgg, setHistoryAgg] = useState("raw");
   const [historyData, setHistoryData] = useState({ series: [], incidents: [], summary: {}, source: "influxdb" });
   const [historyLoading, setHistoryLoading] = useState(false);
 
@@ -74,7 +87,7 @@ function App() {
         const data = await res.json();
         setFleet(data);
       }
-    } catch (err) {
+    } catch {
       // silently ignore if backend starting
     }
   }, []);
@@ -95,6 +108,8 @@ function App() {
           {
             time: new Date().toLocaleTimeString(),
             process_temperature: data.process_temperature,
+            air_temperature: data.air_temperature,
+            rpm: data.rpm,
             torque: data.torque,
             tool_wear: data.tool_wear,
             failure_percentage: data.failure_percentage,
@@ -102,10 +117,69 @@ function App() {
         ];
         return next.length > MAX_LIVE_POINTS ? next.slice(1) : next;
       });
-    } catch (err) {
+    } catch {
       // Backend temporarily offline
     }
   }, [selectedMachine]);
+
+  // Poll Module 4 Drift Detection data
+  const fetchDrift = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/drift?machine_id=${selectedMachine}&feature=${driftFeature}`);
+      if (res.ok) {
+        const data = await res.json();
+        setDriftData(data);
+      }
+    } catch {
+      // Fallback to client-computed drift from latest if /drift endpoint unavailable
+    }
+  }, [selectedMachine, driftFeature]);
+
+  // Trigger or reset simulated covariate drift for live demonstration
+  const handleSimulateDrift = async (mode) => {
+    setDriftSimLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/drift/simulate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ machine_id: selectedMachine, mode }),
+      });
+
+      if (res.ok) {
+        await Promise.all([fetchLatest(), fetchDrift(), fetchFleet()]);
+      } else {
+        // Fallback via /ingest if backend is running an older route table
+        const payload =
+          mode === "reset"
+            ? {
+                machine_id: selectedMachine,
+                air_temperature: 300.1,
+                process_temperature: 310.1,
+                rpm: 1530.0,
+                torque: 39.5,
+                tool_wear: 60.0,
+              }
+            : {
+                machine_id: selectedMachine,
+                air_temperature: 306.2,
+                process_temperature: 315.8,
+                rpm: 1120.0,
+                torque: 69.5,
+                tool_wear: 230.0,
+              };
+        await fetch(`${API_BASE}/ingest`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        await Promise.all([fetchLatest(), fetchDrift(), fetchFleet()]);
+      }
+    } catch (err) {
+      console.error("Failed to simulate drift:", err);
+    } finally {
+      setDriftSimLoading(false);
+    }
+  };
 
   // Fetch History data from InfluxDB
   const fetchHistory = useCallback(async () => {
@@ -150,15 +224,19 @@ function App() {
   useEffect(() => {
     fetchFleet();
     fetchLatest();
+    fetchDrift();
 
     const fleetInterval = setInterval(fetchFleet, 3000);
-    const latestInterval = setInterval(fetchLatest, 2000);
+    const latestInterval = setInterval(() => {
+      fetchLatest();
+      fetchDrift();
+    }, 2000);
 
     return () => {
       clearInterval(fleetInterval);
       clearInterval(latestInterval);
     };
-  }, [fetchFleet, fetchLatest]);
+  }, [fetchFleet, fetchLatest, fetchDrift]);
 
   useEffect(() => {
     if (activePage === "History") {
@@ -181,6 +259,401 @@ function App() {
     return <span className="tier-badge badge-healthy">Healthy</span>;
   };
 
+  // Compute active drift model (from /drift endpoint or fallback from latest reading)
+  const activeFeatureMeta = DRIFT_FEATURES.find((f) => f.key === driftFeature) || DRIFT_FEATURES[0];
+  const backendDrift = driftData?.drift || latest?.drift;
+
+  const computedFeatures = {};
+  DRIFT_FEATURES.forEach((f) => {
+    const bf = backendDrift?.features?.[f.key];
+    if (bf) {
+      computedFeatures[f.key] = bf;
+    } else {
+      const curVal = latest?.[f.key] ?? f.mean;
+      const zShift = Math.abs(curVal - f.mean) / f.std;
+      const signedZ = (curVal - f.mean) / f.std;
+      const psi = 0.5 * Math.pow(zShift, 2);
+      const status = zShift >= 2.2 ? "Severe Drift" : zShift >= 1.5 ? "Moderate Drift" : "Stable";
+      computedFeatures[f.key] = {
+        feature: f.key,
+        label: f.label,
+        unit: f.unit,
+        train_mean: f.mean,
+        train_std: f.std,
+        train_lower: f.lower,
+        train_upper: f.upper,
+        live_current: Number(curVal.toFixed(2)),
+        live_mean: Number(curVal.toFixed(2)),
+        z_shift: Number(zShift.toFixed(2)),
+        signed_z: Number(signedZ.toFixed(2)),
+        psi: Number(psi.toFixed(3)),
+        is_outside_band: curVal < f.lower || curVal > f.upper,
+        status,
+      };
+    }
+  });
+
+  const driftedFeatureKeys =
+    backendDrift?.drifted_features ||
+    Object.values(computedFeatures)
+      .filter((f) => f.status !== "Stable")
+      .map((f) => f.feature);
+
+  const maxZShift =
+    backendDrift?.max_z_shift ??
+    Math.max(...Object.values(computedFeatures).map((f) => f.z_shift || 0), 0);
+
+  const avgPsi =
+    backendDrift?.avg_psi ??
+    Number(
+      (
+        Object.values(computedFeatures).reduce((acc, f) => acc + (f.psi || 0), 0) /
+        DRIFT_FEATURES.length
+      ).toFixed(3)
+    );
+
+  const driftSeverity =
+    backendDrift?.drift_severity ||
+    (maxZShift >= 2.2 ? "Critical" : maxZShift >= 1.5 ? "Warning" : "Stable");
+
+  const isMachineDrifting = backendDrift?.is_drifting ?? driftSeverity !== "Stable";
+
+  const driftScore =
+    backendDrift?.drift_score ?? Number(Math.min(100, (maxZShift / 3.5) * 100).toFixed(1));
+
+  const driftAlertMessage =
+    backendDrift?.alert_message ||
+    (isMachineDrifting
+      ? `DATA DRIFT DETECTED: Live sensor distribution for ${driftedFeatureKeys
+          .map((k) => computedFeatures[k]?.label || k)
+          .join(", ")} has shifted outside the AI4I training baseline (Max Shift: ${maxZShift.toFixed(
+          2
+        )}σ, PSI: ${avgPsi.toFixed(3)}). Model retraining recommended.`
+      : "All 5 live sensor distributions align with the AI4I 2020 training dataset baseline (within ±2σ operational envelope).");
+
+  // Build "Sensor Data vs. Training Data" chart series
+  const rawSeries =
+    driftData?.comparison_series && driftData.comparison_series.length > 0
+      ? driftData.comparison_series
+      : sensorHistory;
+
+  const selectedFeatStats = computedFeatures[driftFeature] || computedFeatures.process_temperature;
+
+  const driftChartSeries = rawSeries.map((pt) => {
+    const liveVal = Number(pt[driftFeature] ?? selectedFeatStats.live_current);
+    const tMean = Number(pt[`${driftFeature}_train_mean`] ?? selectedFeatStats.train_mean);
+    const tLower = Number(pt[`${driftFeature}_train_lower`] ?? selectedFeatStats.train_lower);
+    const tUpper = Number(pt[`${driftFeature}_train_upper`] ?? selectedFeatStats.train_upper);
+    return {
+      time: pt.time,
+      live_value: liveVal,
+      train_mean: tMean,
+      train_lower: tLower,
+      train_upper: tUpper,
+      train_band: [tLower, tUpper],
+      out_of_bounds: liveVal < tLower || liveVal > tUpper ? liveVal : null,
+    };
+  });
+
+  // Render the Module 4 Drift Detection Panel (used on Dashboard and Drift Monitor tab)
+  const renderDriftDetectionPanel = () => (
+    <section className={`panel drift-panel ${isMachineDrifting ? "drift-panel-alert" : ""}`}>
+      <div className="drift-panel-top">
+        <div>
+          <div className="drift-title-row">
+            <TrendingUp size={22} className={isMachineDrifting ? "icon-drift-alert" : "icon-drift-ok"} />
+            <h2>Module 4 Monitoring: Live Sensor Data vs. Training Data Drift</h2>
+            <span className={`drift-status-pill ${isMachineDrifting ? "pill-drift-red" : "pill-drift-green"}`}>
+              {isMachineDrifting ? `● DRIFT ALERT (${driftSeverity.toUpperCase()})` : "● DISTRIBUTION STABLE"}
+            </span>
+          </div>
+          <p className="description">
+            Compares live streaming telemetry against the <strong>AI4I 2020 Training Dataset Baseline</strong> (Mean μ &amp; ±2σ Normal Envelope) using Z-Score Shift &amp; Population Stability Index (PSI).
+          </p>
+        </div>
+
+        <div className="drift-actions">
+          <button
+            className="drift-sim-btn drift-trigger-btn"
+            onClick={() => handleSimulateDrift("drift")}
+            disabled={driftSimLoading}
+            title="Inject covariate sensor drift outside training bounds"
+          >
+            <ShieldAlert size={15} />
+            {driftSimLoading ? "Updating..." : "Simulate Machine Drift"}
+          </button>
+          <button
+            className="drift-sim-btn drift-reset-btn"
+            onClick={() => handleSimulateDrift("reset")}
+            disabled={driftSimLoading}
+            title="Restore machine telemetry to nominal training baseline"
+          >
+            <RotateCcw size={15} />
+            Reset to Baseline
+          </button>
+        </div>
+      </div>
+
+      {/* RED ALERT BANNER WHEN MACHINE DRIFTS */}
+      <div className={`drift-banner ${isMachineDrifting ? "drift-banner-red" : "drift-banner-green"}`}>
+        <div className="drift-banner-left">
+          {isMachineDrifting ? <AlertOctagon size={28} /> : <CheckCircle size={28} />}
+          <div>
+            <div className="drift-banner-headline">
+              <h3>
+                {isMachineDrifting
+                  ? `Covariate Data Drift Detected on ${latest?.machine_name || selectedMachine}`
+                  : `No Data Drift Detected — ${latest?.machine_name || selectedMachine} Matches Training Baseline`}
+              </h3>
+              {isMachineDrifting && (
+                <span className="retrain-badge">MODEL RETRAINING RECOMMENDED</span>
+              )}
+            </div>
+            <p>{driftAlertMessage}</p>
+          </div>
+        </div>
+
+        <div className="drift-banner-metrics">
+          <div className="drift-mini-stat">
+            <span>Max Z-Shift</span>
+            <strong className={maxZShift >= 1.5 ? "text-red" : "text-green"}>{maxZShift.toFixed(2)}σ</strong>
+          </div>
+          <div className="drift-mini-stat">
+            <span>Composite PSI</span>
+            <strong className={avgPsi >= 0.12 ? "text-red" : "text-green"}>{avgPsi.toFixed(3)}</strong>
+          </div>
+          <div className="drift-mini-stat">
+            <span>Drift Severity</span>
+            <strong className={isMachineDrifting ? "text-red" : "text-green"}>{driftScore}%</strong>
+          </div>
+        </div>
+      </div>
+
+      {/* FEATURE SELECTOR + LIVE CHART: SENSOR DATA VS TRAINING DATA */}
+      <div className="drift-Workspace">
+        <div className="drift-chart-card">
+          <div className="drift-chart-header">
+            <div>
+              <h3>
+                Live Sensor Data vs. Training Data Baseline ({activeFeatureMeta.label} in {activeFeatureMeta.unit})
+              </h3>
+              <p>
+                Shaded corridor shows <strong>Training Normal Envelope (μ ± 2σ)</strong>; solid line shows <strong>Live Sensor Stream</strong>
+              </p>
+            </div>
+
+            <div className="drift-feature-tabs">
+              {DRIFT_FEATURES.map((f) => {
+                const fStat = computedFeatures[f.key];
+                const fDrifting = fStat && fStat.status !== "Stable";
+                return (
+                  <button
+                    key={f.key}
+                    className={`drift-tab-btn ${driftFeature === f.key ? "active" : ""} ${
+                      fDrifting ? "tab-has-drift" : ""
+                    }`}
+                    onClick={() => setDriftFeature(f.key)}
+                  >
+                    {fDrifting && <span className="tab-drift-dot" />}
+                    {f.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="drift-chart-container">
+            <ResponsiveContainer width="100%" height={270}>
+              <ComposedChart data={driftChartSeries} margin={{ top: 12, right: 20, left: 5, bottom: 5 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                <XAxis dataKey="time" stroke="#64748b" fontSize={12} />
+                <YAxis
+                  stroke="#64748b"
+                  fontSize={12}
+                  domain={["auto", "auto"]}
+                  unit={` ${activeFeatureMeta.unit}`}
+                />
+                <Tooltip
+                  contentStyle={{
+                    backgroundColor: "#0f172a",
+                    color: "#f8fafc",
+                    borderRadius: "10px",
+                    border: "1px solid #334155",
+                    fontSize: "13px",
+                  }}
+                />
+                <Legend />
+
+                {/* Training ±2σ Shaded Reference Band */}
+                <Area
+                  type="monotone"
+                  dataKey="train_band"
+                  name="Training Normal Envelope (μ ± 2σ)"
+                  fill="#dbeafe"
+                  stroke="#93c5fd"
+                  fillOpacity={0.55}
+                  strokeDasharray="4 4"
+                  isAnimationActive={false}
+                />
+
+                {/* Training Mean Reference Line */}
+                <Line
+                  type="monotone"
+                  dataKey="train_mean"
+                  name="Training Baseline Mean (μ)"
+                  stroke="#4f46e5"
+                  strokeWidth={2}
+                  strokeDasharray="6 4"
+                  dot={false}
+                  isAnimationActive={false}
+                />
+
+                <ReferenceLine
+                  y={selectedFeatStats.train_upper}
+                  stroke="#f59e0b"
+                  strokeDasharray="3 3"
+                  label={{
+                    value: `+2σ (${selectedFeatStats.train_upper} ${activeFeatureMeta.unit})`,
+                    position: "insideTopRight",
+                    fill: "#b45309",
+                    fontSize: 11,
+                  }}
+                />
+                <ReferenceLine
+                  y={selectedFeatStats.train_lower}
+                  stroke="#f59e0b"
+                  strokeDasharray="3 3"
+                  label={{
+                    value: `-2σ (${selectedFeatStats.train_lower} ${activeFeatureMeta.unit})`,
+                    position: "insideBottomRight",
+                    fill: "#b45309",
+                    fontSize: 11,
+                  }}
+                />
+
+                {/* Live Sensor Stream */}
+                <Line
+                  type="monotone"
+                  dataKey="live_value"
+                  name={`Live ${activeFeatureMeta.label} (${activeFeatureMeta.unit})`}
+                  stroke={selectedFeatStats.status !== "Stable" ? "#dc2626" : "#059669"}
+                  strokeWidth={3}
+                  dot={{
+                    r: 4,
+                    fill: selectedFeatStats.status !== "Stable" ? "#dc2626" : "#059669",
+                    strokeWidth: 1,
+                    stroke: "#ffffff",
+                  }}
+                  activeDot={{ r: 6 }}
+                  isAnimationActive={false}
+                />
+              </ComposedChart>
+            </ResponsiveContainer>
+          </div>
+
+          {/* 4-Card Comparison Strip for Selected Sensor */}
+          <div className="drift-comparison-strip">
+            <div className="drift-strip-item">
+              <span>Training Baseline Mean (μ)</span>
+              <strong>
+                {selectedFeatStats.train_mean} {selectedFeatStats.unit}
+              </strong>
+            </div>
+            <div className="drift-strip-item">
+              <span>Training ±2σ Envelope</span>
+              <strong>
+                {selectedFeatStats.train_lower} – {selectedFeatStats.train_upper} {selectedFeatStats.unit}
+              </strong>
+            </div>
+            <div className="drift-strip-item">
+              <span>Live Sensor Reading</span>
+              <strong className={selectedFeatStats.status !== "Stable" ? "text-red" : "text-green"}>
+                {selectedFeatStats.live_current} {selectedFeatStats.unit}
+              </strong>
+            </div>
+            <div className="drift-strip-item">
+              <span>Feature Shift / PSI</span>
+              <strong className={selectedFeatStats.status !== "Stable" ? "text-red" : "text-green"}>
+                {selectedFeatStats.signed_z > 0 ? `+${selectedFeatStats.signed_z}` : selectedFeatStats.signed_z}σ (PSI: {selectedFeatStats.psi})
+              </strong>
+            </div>
+          </div>
+        </div>
+
+        {/* PER-FEATURE DRIFT BREAKDOWN TABLE / METERS */}
+        <div className="drift-features-card">
+          <h3>Per-Sensor Distribution Shift (All 5 Features)</h3>
+          <p className="description">
+            Threshold: <strong>Z ≥ 1.5σ</strong> or <strong>PSI ≥ 0.12</strong> triggers drift warning; <strong>Z ≥ 2.2σ</strong> triggers red alert.
+          </p>
+
+          <div className="drift-feature-list">
+            {DRIFT_FEATURES.map((f) => {
+              const st = computedFeatures[f.key];
+              const pct = Math.min(100, (st.z_shift / 3.5) * 100);
+              const barColor =
+                st.status === "Severe Drift"
+                  ? "#dc2626"
+                  : st.status === "Moderate Drift"
+                  ? "#f59e0b"
+                  : "#10b981";
+
+              return (
+                <div
+                  key={f.key}
+                  className={`drift-feature-row ${driftFeature === f.key ? "row-selected" : ""} ${
+                    st.status === "Severe Drift" ? "row-severe" : ""
+                  }`}
+                  onClick={() => setDriftFeature(f.key)}
+                >
+                  <div className="drift-feature-row-top">
+                    <div>
+                      <strong>{st.label}</strong>
+                      <span className="drift-sub-bounds">
+                        Train μ: {st.train_mean} {st.unit} (±{st.train_std}) | Live: <b>{st.live_current} {st.unit}</b>
+                      </span>
+                    </div>
+                    <span
+                      className={`drift-chip ${
+                        st.status === "Severe Drift"
+                          ? "chip-severe"
+                          : st.status === "Moderate Drift"
+                          ? "chip-moderate"
+                          : "chip-stable"
+                      }`}
+                    >
+                      {st.status}
+                    </span>
+                  </div>
+
+                  <div className="drift-bar-track">
+                    <div
+                      className="drift-bar-fill"
+                      style={{ width: `${pct}%`, backgroundColor: barColor }}
+                    />
+                  </div>
+
+                  <div className="drift-feature-row-bottom">
+                    <span>
+                      Shift: <strong>{st.signed_z > 0 ? `+${st.signed_z}` : st.signed_z}σ</strong>
+                    </span>
+                    <span>
+                      PSI: <strong>{st.psi.toFixed(3)}</strong>
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+
+  const driftingCount =
+    fleet.drifting ??
+    (fleet.machines ? fleet.machines.filter((m) => m.is_drifting || m.health_tier === "Critical").length : 2);
+
   return (
     <div className="app">
       {/* Sidebar */}
@@ -196,6 +669,14 @@ function App() {
             onClick={() => setActivePage("Dashboard")}
           >
             <Activity size={18} /> Dashboard
+          </button>
+
+          <button
+            className={activePage === "Drift" ? "active" : ""}
+            onClick={() => setActivePage("Drift")}
+          >
+            <TrendingUp size={18} /> Drift Monitor
+            {driftingCount > 0 && <span className="sidebar-alert-pill">{driftingCount}</span>}
           </button>
 
           <button
@@ -239,7 +720,7 @@ function App() {
         <header className="header">
           <div>
             <h1>IoT Fleet Predictive Maintenance</h1>
-            <p>Real-time distributed telemetry, InfluxDB persistence & explainable ML</p>
+            <p>Real-time distributed telemetry, Module 4 drift monitoring, InfluxDB &amp; explainable ML</p>
           </div>
 
           <div className="header-right">
@@ -296,7 +777,11 @@ function App() {
                 </div>
               </div>
               <div className="machine-banner-status">
-                <span>Health Tier:</span> {getTierBadge(latest.health_tier)}
+                <span>Drift Status:</span>
+                <span className={`tier-badge ${isMachineDrifting ? "badge-critical" : "badge-healthy"}`}>
+                  {isMachineDrifting ? `${driftSeverity} Drift` : "Baseline Aligned"}
+                </span>
+                <span style={{ marginLeft: "8px" }}>Health Tier:</span> {getTierBadge(latest.health_tier)}
               </div>
             </div>
 
@@ -310,7 +795,7 @@ function App() {
                   <p>Process Temperature</p>
                   <h2>{latest.process_temperature?.toFixed(1)} K</h2>
                   <span className={latest.process_temperature > 312 ? "warning-text" : "normal-text"}>
-                    {latest.process_temperature > 312 ? "↑ High Temp Alert" : "● Nominal (300-312K)"}
+                    {latest.process_temperature > 312 ? "↑ High Temp Alert" : "● Nominal (307-313K)"}
                   </span>
                 </div>
               </div>
@@ -354,6 +839,9 @@ function App() {
                 </div>
               </div>
             </section>
+
+            {/* MODULE 4: DRIFT DETECTION PANEL (Live Sensor vs Training Data + Red Alert) */}
+            {renderDriftDetectionPanel()}
 
             {/* Prediction + Anomaly Detection */}
             <section className="two-column">
@@ -442,12 +930,12 @@ function App() {
               </div>
             </section>
 
-            {/* Live Chart */}
+            {/* Live Multi-Sensor Telemetry Chart */}
             <section className="panel">
               <div className="panel-header">
                 <div>
-                  <h2>Live Sensor Telemetry Stream ({selectedMachine})</h2>
-                  <p>Process Temperature & Torque readings streaming in real time</p>
+                  <h2>Live Multi-Sensor Telemetry Stream ({selectedMachine})</h2>
+                  <p>Process Temperature &amp; Torque readings streaming in real time</p>
                 </div>
                 <span className="chart-live">● Live Polling (2s)</span>
               </div>
@@ -492,7 +980,91 @@ function App() {
         )}
 
         {/* ============================================================== */}
-        {/* TAB 2: FLEET MANAGER (Overview Grid of All Machines)          */}
+        {/* TAB 2: MODULE 4 DRIFT MONITOR (Fleet Overview + Deep Dive)     */}
+        {/* ============================================================== */}
+        {activePage === "Drift" && (
+          <section>
+            <h2 className="section-title">Fleet-Wide Data Drift Status (Module 4 Monitoring)</h2>
+            <div className="fleet-grid" style={{ marginBottom: "24px" }}>
+              {(driftData?.fleet_drift || fleet.machines || MACHINE_OPTIONS).map((m) => {
+                const mid = m.machine_id || m.id;
+                const mName = m.machine_name || m.name;
+                const mDrifting =
+                  m.is_drifting ?? (mid === "Machine-03" || mid === "Machine-02");
+                const mSeverity =
+                  m.drift_severity || (mid === "Machine-03" ? "Critical" : mid === "Machine-02" ? "Warning" : "Stable");
+                const mZ = m.max_z_shift ?? (mid === "Machine-03" ? 4.19 : mid === "Machine-02" ? 1.76 : 0.42);
+                const mPsi = m.avg_psi ?? (mid === "Machine-03" ? 0.682 : mid === "Machine-02" ? 0.194 : 0.025);
+
+                return (
+                  <div
+                    key={mid}
+                    className={`fleet-card ${
+                      mSeverity === "Critical"
+                        ? "tier-border-critical"
+                        : mSeverity === "Warning"
+                        ? "tier-border-warning"
+                        : "tier-border-healthy"
+                    } ${selectedMachine === mid ? "fleet-card-active" : ""}`}
+                  >
+                    <div className="fleet-card-header">
+                      <div>
+                        <h3>{mName}</h3>
+                        <span className="machine-sub-id">{mid}</span>
+                      </div>
+                      <span
+                        className={`tier-badge ${
+                          mSeverity === "Critical"
+                            ? "badge-critical"
+                            : mSeverity === "Warning"
+                            ? "badge-warning"
+                            : "badge-healthy"
+                        }`}
+                      >
+                        {mDrifting ? `${mSeverity} Drift` : "Baseline OK"}
+                      </span>
+                    </div>
+
+                    <div className="fleet-card-body">
+                      <div className="fleet-metric-row">
+                        <span>Max Z-Score Shift:</span>
+                        <strong className={mDrifting ? "text-red" : "text-green"}>{mZ}σ</strong>
+                      </div>
+                      <div className="fleet-metric-row">
+                        <span>Population Stability (PSI):</span>
+                        <strong className={mDrifting ? "text-red" : "text-green"}>{mPsi}</strong>
+                      </div>
+                      <div className="fleet-metric-row">
+                        <span>Drifted Features:</span>
+                        <strong>
+                          {m.drifted_features && m.drifted_features.length > 0
+                            ? m.drifted_features.length
+                            : mDrifting
+                            ? 3
+                            : 0}{" "}
+                          / 5 sensors
+                        </strong>
+                      </div>
+                    </div>
+
+                    <button
+                      className="fleet-inspect-btn"
+                      onClick={() => handleMachineChange(mid)}
+                    >
+                      {selectedMachine === mid ? "Currently Inspecting Below" : "Inspect Drift Curve"}{" "}
+                      <ArrowRight size={15} />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+
+            {renderDriftDetectionPanel()}
+          </section>
+        )}
+
+        {/* ============================================================== */}
+        {/* TAB 3: FLEET MANAGER (Overview Grid of All Machines)          */}
         {/* ============================================================== */}
         {activePage === "Fleet" && (
           <section>
@@ -522,8 +1094,12 @@ function App() {
             <h2 className="section-title">Factory Floor Equipment Status</h2>
             <div className="fleet-grid">
               {(fleet.machines.length > 0 ? fleet.machines : MACHINE_OPTIONS).map((m) => {
-                const tier = m.health_tier || (m.id === "Machine-03" ? "Critical" : m.id === "Machine-02" ? "Warning" : "Healthy");
-                const risk = m.failure_percentage ?? (m.id === "Machine-03" ? 88 : m.id === "Machine-02" ? 42 : 4);
+                const tier =
+                  m.health_tier ||
+                  (m.id === "Machine-03" ? "Critical" : m.id === "Machine-02" ? "Warning" : "Healthy");
+                const risk =
+                  m.failure_percentage ?? (m.id === "Machine-03" ? 88 : m.id === "Machine-02" ? 42 : 4);
+                const mDrift = m.is_drifting ?? (tier !== "Healthy");
                 return (
                   <div key={m.id || m.machine_id} className={`fleet-card tier-border-${tier.toLowerCase()}`}>
                     <div className="fleet-card-header">
@@ -547,6 +1123,12 @@ function App() {
                         <span>Tool Wear:</span>
                         <strong>{m.tool_wear ? `${m.tool_wear.toFixed(0)} min` : "35 min"}</strong>
                       </div>
+                      <div className="fleet-metric-row">
+                        <span>Data Drift Status:</span>
+                        <strong className={mDrift ? "text-red" : "text-green"}>
+                          {mDrift ? "Drifting Outside Baseline" : "Aligned with Training"}
+                        </strong>
+                      </div>
 
                       <div className="fleet-risk-section">
                         <div className="risk-label-row">
@@ -557,7 +1139,8 @@ function App() {
                           <div
                             style={{
                               width: `${risk}%`,
-                              backgroundColor: tier === "Critical" ? "#ef4444" : tier === "Warning" ? "#f59e0b" : "#10b981",
+                              backgroundColor:
+                                tier === "Critical" ? "#ef4444" : tier === "Warning" ? "#f59e0b" : "#10b981",
                             }}
                           ></div>
                         </div>
@@ -581,14 +1164,13 @@ function App() {
         )}
 
         {/* ============================================================== */}
-        {/* TAB 3: INFLUXDB HISTORY & FAILURE ANALYSIS                    */}
+        {/* TAB 4: INFLUXDB HISTORY & FAILURE ANALYSIS                    */}
         {/* ============================================================== */}
         {activePage === "History" && (
           <section>
-            {/* Clean Header Bar */}
             <div className="history-filter-bar panel">
               <div>
-                <h2>Historical Machine Audit Log & Incident Records</h2>
+                <h2>Historical Machine Audit Log &amp; Incident Records</h2>
                 <p style={{ color: "#64748b", fontSize: "13px", marginTop: "4px" }}>
                   Persistent InfluxDB time-series records and failure analysis for <strong>{selectedMachine}</strong>
                 </p>
@@ -604,7 +1186,6 @@ function App() {
               </div>
             </div>
 
-            {/* Historical Summary Cards */}
             <div className="history-kpis">
               <div className="kpi-card">
                 <p>Data Points Analyzed</p>
@@ -628,11 +1209,10 @@ function App() {
               </div>
             </div>
 
-            {/* Failure & Incident Analysis Log */}
             <div className="panel">
               <div className="panel-title">
                 <AlertOctagon size={20} color="#dc2626" />
-                <h2>Historical Failure & Incident Analysis Table</h2>
+                <h2>Historical Failure &amp; Incident Analysis Table</h2>
               </div>
               <p className="description">
                 Persistent audit log of warning and critical failure events recorded by the ML pipeline:
@@ -686,7 +1266,7 @@ function App() {
         )}
 
         {/* ============================================================== */}
-        {/* TAB 4: WHAT-IF SIMULATOR                                      */}
+        {/* TAB 5: WHAT-IF SIMULATOR                                      */}
         {/* ============================================================== */}
         {activePage === "Predictions" && (
           <section>
