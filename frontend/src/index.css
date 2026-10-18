@@ -1036,3 +1036,463 @@ nav button.active {
     grid-template-columns: repeat(2, 1fr);
   }
 }
+
+/* ============================================================== */
+/* MODULE 4: LIVE DATA & COVARIATE DRIFT DETECTION PANEL          */
+/* ============================================================== */
+
+.drift-panel {
+  border: 1px solid #e2e8f0;
+  transition: border-color 0.25s ease, box-shadow 0.25s ease;
+}
+
+.drift-panel-alert {
+  border: 2px solid #ef4444;
+  box-shadow: 0 6px 22px rgba(239, 68, 68, 0.12);
+}
+
+.drift-panel-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 18px;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+}
+
+.drift-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+
+.drift-title-row h2 {
+  font-size: 19px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.icon-drift-alert {
+  color: #dc2626;
+}
+
+.icon-drift-ok {
+  color: #059669;
+}
+
+.drift-status-pill {
+  font-size: 11px;
+  font-weight: 800;
+  padding: 4px 11px;
+  border-radius: 20px;
+  letter-spacing: 0.4px;
+}
+
+.pill-drift-red {
+  background: #fee2e2;
+  color: #b91c1c;
+  border: 1px solid #fca5a5;
+  animation: pulse-red-pill 1.8s infinite;
+}
+
+.pill-drift-green {
+  background: #dcfce7;
+  color: #15803d;
+  border: 1px solid #86efac;
+}
+
+@keyframes pulse-red-pill {
+  0% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.5);
+  }
+  70% {
+    box-shadow: 0 0 0 6px rgba(239, 68, 68, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0);
+  }
+}
+
+.drift-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.drift-sim-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 14px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  font-weight: 700;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: all 0.2s ease;
+}
+
+.drift-sim-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.drift-trigger-btn {
+  background: #dc2626;
+  color: #ffffff;
+  border-color: #b91c1c;
+}
+
+.drift-trigger-btn:hover:not(:disabled) {
+  background: #b91c1c;
+  transform: translateY(-1px);
+}
+
+.drift-reset-btn {
+  background: #f8fafc;
+  color: #334155;
+  border-color: #cbd5e1;
+}
+
+.drift-reset-btn:hover:not(:disabled) {
+  background: #e2e8f0;
+  color: #0f172a;
+}
+
+/* Red / Green Drift Alert Banner */
+.drift-banner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 20px;
+  padding: 16px 20px;
+  border-radius: 10px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+
+.drift-banner-red {
+  background: linear-gradient(90deg, #fef2f2 0%, #fff1f2 100%);
+  border: 1.5px solid #f87171;
+  color: #991b1b;
+}
+
+.drift-banner-green {
+  background: linear-gradient(90deg, #f0fdf4 0%, #ecfdf5 100%);
+  border: 1.5px solid #86efac;
+  color: #166534;
+}
+
+.drift-banner-left {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  flex: 1;
+  min-width: 280px;
+}
+
+.drift-banner-left svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.drift-banner-headline {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+
+.drift-banner-headline h3 {
+  font-size: 15.5px;
+  font-weight: 800;
+}
+
+.drift-banner p {
+  font-size: 13px;
+  line-height: 1.45;
+  opacity: 0.92;
+}
+
+.retrain-badge {
+  background: #dc2626;
+  color: #ffffff;
+  font-size: 10.5px;
+  font-weight: 800;
+  padding: 3px 9px;
+  border-radius: 4px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+
+.drift-banner-metrics {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.drift-mini-stat {
+  background: rgba(255, 255, 255, 0.88);
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 105px;
+}
+
+.drift-mini-stat span {
+  font-size: 11px;
+  color: #64748b;
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+
+.drift-mini-stat strong {
+  font-size: 16px;
+  font-weight: 800;
+}
+
+.text-red {
+  color: #dc2626 !important;
+}
+
+.text-green {
+  color: #059669 !important;
+}
+
+/* Drift Workspace Grid (Chart + Per-Feature Breakdown) */
+.drift-Workspace {
+  display: grid;
+  grid-template-columns: 1.55fr 1fr;
+  gap: 20px;
+  align-items: stretch;
+}
+
+.drift-chart-card,
+.drift-features-card {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+}
+
+.drift-chart-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.drift-chart-header h3,
+.drift-features-card h3 {
+  font-size: 15px;
+  font-weight: 700;
+  color: #0f172a;
+  margin-bottom: 4px;
+}
+
+.drift-chart-header p {
+  font-size: 12.5px;
+  color: #64748b;
+}
+
+.drift-feature-tabs {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.drift-tab-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 11px;
+  border-radius: 6px;
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.drift-tab-btn:hover {
+  border-color: #2563eb;
+  color: #2563eb;
+}
+
+.drift-tab-btn.active {
+  background: #1e40af;
+  color: #ffffff;
+  border-color: #1e40af;
+}
+
+.drift-tab-btn.tab-has-drift:not(.active) {
+  border-color: #fca5a5;
+  background: #fef2f2;
+  color: #b91c1c;
+}
+
+.tab-drift-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #ef4444;
+  display: inline-block;
+}
+
+.drift-chart-container {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 12px 8px 4px 0;
+  margin-bottom: 14px;
+}
+
+.drift-comparison-strip {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  margin-top: auto;
+}
+
+.drift-strip-item {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.drift-strip-item span {
+  font-size: 11px;
+  color: #64748b;
+  font-weight: 600;
+}
+
+.drift-strip-item strong {
+  font-size: 14px;
+  color: #0f172a;
+  font-weight: 800;
+}
+
+/* Per-Feature Drift Rows */
+.drift-feature-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.drift-feature-row {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 10px 12px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.drift-feature-row:hover {
+  border-color: #94a3b8;
+}
+
+.drift-feature-row.row-selected {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.12);
+}
+
+.drift-feature-row.row-severe {
+  border-left: 4px solid #dc2626;
+}
+
+.drift-feature-row-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.drift-feature-row-top strong {
+  font-size: 13px;
+  color: #0f172a;
+  display: block;
+}
+
+.drift-sub-bounds {
+  font-size: 11.5px;
+  color: #64748b;
+}
+
+.drift-chip {
+  font-size: 10.5px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 12px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.chip-severe {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.chip-moderate {
+  background: #fef3c7;
+  color: #b45309;
+}
+
+.chip-stable {
+  background: #dcfce7;
+  color: #15803d;
+}
+
+.drift-bar-track {
+  height: 7px;
+  background: #e2e8f0;
+  border-radius: 6px;
+  overflow: hidden;
+  margin-bottom: 6px;
+}
+
+.drift-bar-fill {
+  height: 100%;
+  border-radius: 6px;
+  transition: width 0.3s ease;
+}
+
+.drift-feature-row-bottom {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11.5px;
+  color: #475569;
+}
+
+.fleet-card-active {
+  box-shadow: 0 0 0 2px #2563eb, 0 6px 14px rgba(0, 0, 0, 0.08);
+}
+
+@media (max-width: 1150px) {
+  .drift-Workspace {
+    grid-template-columns: 1fr;
+  }
+  .drift-comparison-strip {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
